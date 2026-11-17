@@ -33,6 +33,7 @@ PRICE_SECRET = 75
 # =====================
 
 # .strip() удаляет случайные пробелы и переносы строк
+print(f"DEBUG BOT_TOKEN: length={len(BOT_TOKEN) if BOT_TOKEN else 0}, value='{repr(BOT_TOKEN)}'")
 bot = Bot(token=BOT_TOKEN.strip() if BOT_TOKEN else "0:invalid")
 dp = Dispatcher()
 
