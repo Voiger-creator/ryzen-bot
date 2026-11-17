@@ -1,3 +1,4 @@
+import os
 import asyncio
 import json
 import os
@@ -16,8 +17,8 @@ from aiogram.types import (
 )
 
 # ===== НАСТРОЙКИ =====
-BOT_TOKEN = "ВАШ_ТОКЕН_ОТ_BOTFATHER"  # <-- ВСТАВЬТЕ ВАШ ТОКЕН
-ADMIN_ID = 123456789                   # <-- ВСТАВЬТЕ ВАШ ID
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # <-- ВСТАВЬТЕ ВАШ ТОКЕН
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))                   # <-- ВСТАВЬТЕ ВАШ ID
 ORDERS_FILE = "orders.json"
 SETTINGS_FILE = "settings.json"
 
