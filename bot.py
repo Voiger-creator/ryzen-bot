@@ -11,12 +11,11 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    Message, CallbackQuery,
+    Message, CallbackQuery, LabeledPrice, PreCheckoutQuery,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
 
 # ===== НАСТРОЙКИ =====
-# Токен и ID берутся из переменных окружения (Environment Variables) на Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
@@ -32,24 +31,20 @@ PRICE_DRAW_ANIME = 100
 PRICE_DRAW_JOJO = 200
 PRICE_DRAW_TECH = 150
 PRICE_SECRET = 75
+STARS_PRICE = 50 # Цена в звездах (фиксированная для теста)
 # =====================
 
-# Проверка при запуске (чтобы видеть в логах, если токен не подтянулся)
-print(f"DEBUG BOT_TOKEN: length={len(BOT_TOKEN) if BOT_TOKEN else 0}, value='{repr(BOT_TOKEN)}'")
+print(f"DEBUG BOT_TOKEN: length={len(BOT_TOKEN) if BOT_TOKEN else 0}")
 
 bot = Bot(token=BOT_TOKEN.strip() if BOT_TOKEN else "0:invalid")
 dp = Dispatcher()
 
 # ===== ВЕБ-СЕРВЕР ДЛЯ RENDER =====
 app = Flask(__name__)
-
 @app.route('/')
 @app.route('/health')
-def health_check():
-    return "Bot is running", 200
-
-def run_flask():
-    app.run(host='0.0.0.0', port=10000)
+def health_check(): return "Bot is running", 200
+def run_flask(): app.run(host='0.0.0.0', port=10000)
 
 # ===== СОСТОЯНИЯ =====
 class Order(StatesGroup):
@@ -58,21 +53,23 @@ class Order(StatesGroup):
     waiting_admin_comment = State()
     waiting_admin_reject = State()
     waiting_file = State()
+    waiting_admin_news = State()
+    waiting_draw_pause_reason = State()
 
 # ===== РАБОТА С ФАЙЛАМИ =====
 def load_json(filename):
     if os.path.exists(filename):
-        with open(filename, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(filename, "r", encoding="utf-8") as f: return json.load(f)
     return {}
 
 def save_json(filename, data):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    with open(filename, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
 def load_orders(): return load_json(ORDERS_FILE) or {"counter": 0, "orders": []}
 def save_orders(data): save_json(ORDERS_FILE, data)
-def load_settings(): return load_json(SETTINGS_FILE) or {"is_paused": False}
+
+def load_settings():
+    return load_json(SETTINGS_FILE) or {"is_paused": False, "draw_pause": False, "draw_pause_reason": ""}
 def save_settings(data): save_json(SETTINGS_FILE, data)
 
 def toggle_pause():
@@ -80,6 +77,14 @@ def toggle_pause():
     s["is_paused"] = not s["is_paused"]
     save_settings(s)
     return s["is_paused"]
+
+def toggle_draw_pause(reason=""):
+    s = load_settings()
+    s["draw_pause"] = not s["draw_pause"]
+    if s["draw_pause"]: s["draw_pause_reason"] = reason
+    else: s["draw_pause_reason"] = ""
+    save_settings(s)
+    return s["draw_pause"]
 
 def get_next_order_number():
     data = load_orders()
@@ -94,8 +99,7 @@ def save_order(order):
 
 def get_order(order_number):
     for order in load_orders()["orders"]:
-        if order["number"] == order_number:
-            return order
+        if order["number"] == order_number: return order
     return None
 
 def update_order(order_number, **kwargs):
@@ -117,13 +121,26 @@ def main_menu_kb():
         [InlineKeyboardButton(text="ℹ️ О боте", callback_data="menu_info")],
     ])
 
-def back_kb():
+def back_main_kb():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅ Назад в меню", callback_data="back_main")]])
+
+def after_order_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🆕 Сделать еще один заказ", callback_data="new_order")],
+        [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_main")]
+    ])
 
 def admin_panel_kb():
     s = load_settings()
-    pause_text = "▶️ Снять с паузы" if s["is_paused"] else "⏸ Поставить на паузу"
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=pause_text, callback_data="toggle_pause")]])
+    pause_text = "▶️ Снять с паузы (всё)" if s["is_paused"] else "⏸ Поставить на паузу (всё)"
+    draw_pause_text = "▶️ Разрешить рисование" if s["draw_pause"] else "⏸ Пауза для рисования"
+    
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=pause_text, callback_data="toggle_pause")],
+        [InlineKeyboardButton(text=draw_pause_text, callback_data="toggle_draw_pause")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="📰 Сделать рассылку (Новости)", callback_data="admin_news")]
+    ])
 
 def admin_order_kb(order_num):
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -142,21 +159,89 @@ def rating_kb(order_num):
          InlineKeyboardButton(text="⭐ 5", callback_data=f"rate_5_{order_num}")]
     ])
 
+def payment_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"⭐ Оплатить {STARS_PRICE} Stars", callback_data="pay_stars")],
+        [InlineKeyboardButton(text="💵 Оплата при встрече", callback_data="pay_cash")]
+    ])
+
 # ===== АДМИН ПАНЕЛЬ =====
 @dp.message(Command("admin"))
 async def cmd_admin(message: Message):
     if message.from_user.id != ADMIN_ID: return
     s = load_settings()
     status = "На паузе ⏸" if s["is_paused"] else "Работает ✅"
-    await message.answer(f"👑 <b>Панель админа</b>\nСтатус: <b>{status}</b>", reply_markup=admin_panel_kb(), parse_mode="HTML")
+    draw_status = f"Рисование на паузе (Причина: {s['draw_pause_reason']})" if s["draw_pause"] else "Рисование работает"
+    
+    await message.answer(
+        f"👑 <b>Панель админа</b>\n\n"
+        f"Общий статус: <b>{status}</b>\n"
+        f"Рисование: <b>{draw_status}</b>", 
+        reply_markup=admin_panel_kb(), parse_mode="HTML"
+    )
 
 @dp.callback_query(F.data == "toggle_pause")
 async def process_toggle_pause(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID: return await call.answer("Нет прав", show_alert=True)
-    is_paused = toggle_pause()
-    status = "На паузе ⏸" if is_paused else "Работает ✅"
-    await call.message.edit_text(f"👑 <b>Панель админа</b>\nСтатус: <b>{status}</b>", reply_markup=admin_panel_kb(), parse_mode="HTML")
-    await call.answer(f"Бот: {status}")
+    toggle_pause()
+    s = load_settings()
+    status = "На паузе ⏸" if s["is_paused"] else "Работает ✅"
+    draw_status = f"Рисование на паузе" if s["draw_pause"] else "Рисование работает"
+    await call.message.edit_text(f"👑 <b>Панель админа</b>\n\nОбщий статус: <b>{status}</b>\nРисование: <b>{draw_status}</b>", reply_markup=admin_panel_kb(), parse_mode="HTML")
+    await call.answer(f"Общий статус: {status}")
+
+@dp.callback_query(F.data == "toggle_draw_pause")
+async def process_toggle_draw_pause(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return await call.answer("Нет прав", show_alert=True)
+    s = load_settings()
+    if s["draw_pause"]:
+        toggle_draw_pause()
+        await call.answer("Рисование снова разрешено!")
+    else:
+        await state.set_state(Order.waiting_draw_pause_reason)
+        await call.message.answer("Введите причину паузы для рисования (клиенты её увидят):")
+    await call.answer()
+
+@dp.message(Order.waiting_draw_pause_reason)
+async def set_draw_pause_reason(message: Message, state: FSMContext):
+    toggle_draw_pause(reason=message.text)
+    await state.clear()
+    await message.answer(f"✅ Рисование на паузе. Причина: {message.text}")
+    await cmd_admin(message) 
+
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID: return await call.answer("Нет прав", show_alert=True)
+    data = load_orders()
+    total = len(data["orders"])
+    done = sum(1 for o in data["orders"] if o["status"] == "Выполнен")
+    await call.message.answer(f"📊 <b>Статистика</b>\n\nВсего заказов: {total}\nВыполнено: {done}", parse_mode="HTML")
+    await call.answer()
+
+@dp.callback_query(F.data == "admin_news")
+async def admin_news(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return await call.answer("Нет прав", show_alert=True)
+    await state.set_state(Order.waiting_admin_news)
+    await call.message.answer("Напиши текст новости для рассылки всем клиентам (или 'Отмена'):")
+    await call.answer()
+
+@dp.message(Order.waiting_admin_news)
+async def send_news(message: Message, state: FSMContext):
+    if message.text.lower() == 'отмена':
+        await state.clear()
+        return await message.answer("Рассылка отменена.")
+    
+    data = load_orders()
+    user_ids = set(order["user_id"] for order in data["orders"])
+    count = 0
+    for uid in user_ids:
+        try:
+            await bot.send_message(uid, f"📰 <b>НОВОСТИ МАСТЕРСКОЙ:</b>\n\n{message.text}", parse_mode="HTML")
+            count += 1
+            await asyncio.sleep(0.1)
+        except: pass
+    await state.clear()
+    await message.answer(f"✅ Новость отправлена {count} клиентам.")
 
 # ===== КЛИЕНТСКАЯ ЧАСТЬ =====
 @dp.message(CommandStart())
@@ -164,7 +249,7 @@ async def start(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(f"Привет, {message.from_user.first_name}! 👋\nВыбери услугу:", reply_markup=main_menu_kb())
 
-@dp.callback_query(F.data == "back_main")
+@dp.callback_query(F.data.in_(["back_main", "new_order"]))
 async def back_main(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.message.edit_text("Выбери услугу:", reply_markup=main_menu_kb())
@@ -178,12 +263,12 @@ async def show_info(call: CallbackQuery):
         "Увлекаюсь программированием, пайкой, 3D-печатью и рисованием.\n\n"
         "🧠 <b>Наша команда:</b>\n"
         "• <b>Человек (Я):</b> Идеи, заказы, финальная сборка.\n"
-        "• <b>DeepSeek (ИИ):</b> Помощник в коде и отладке (Вайб-кодинг!).\n"
+        "• <b>DeepSeek (ИИ):</b> Помощник в коде и отладке.\n"
         "• <b>Ryzen AI (В разработке):</b> Локальный ИИ-помощник.\n\n"
         "🛠 <b>Услуги:</b> Печать, Арты, Кодинг, Секретные заказы.\n"
         "🕒 <b>Сроки:</b> Печать 1 день, Арт 3-5 дней, Кодинг от недели."
     )
-    await call.message.edit_text(text, reply_markup=back_kb(), parse_mode="HTML")
+    await call.message.edit_text(text, reply_markup=back_main_kb(), parse_mode="HTML")
     await call.answer()
 
 # --- ПЕЧАТЬ ---
@@ -209,6 +294,10 @@ async def print_choose(call: CallbackQuery, state: FSMContext):
 # --- РИСОВАНИЕ ---
 @dp.callback_query(F.data == "menu_draw")
 async def draw_menu(call: CallbackQuery):
+    s = load_settings()
+    if s["draw_pause"]:
+        return await call.answer(f"⏸ Рисование на паузе. Причина: {s['draw_pause_reason']}", show_alert=True)
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"Скетч ({PRICE_DRAW_SKETCH} грн)", callback_data="draw_sketch")],
         [InlineKeyboardButton(text=f"Аниме ({PRICE_DRAW_ANIME} грн)", callback_data="draw_anime")],
@@ -291,7 +380,7 @@ async def receive_file(message: Message, state: FSMContext):
     await state.set_state(Order.waiting_edits)
     await message.answer("Файл получен! Напиши комментарии (цветная/чб):")
 
-# --- ФИНАЛИЗАЦИЯ ---
+# --- ФИНАЛИЗАЦИЯ И ОПЛАТА ---
 @dp.message(Order.waiting_edits)
 async def finish_order(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -299,42 +388,75 @@ async def finish_order(message: Message, state: FSMContext):
     
     order_num = get_next_order_number()
     user = message.from_user
-    username = f"@{user.username}" if user.username else "—"
-    price_str = f"{data.get('price')} грн" if isinstance(data.get('price'), (int, float)) else data.get('price')
+    price = data.get('price', 0)
+    price_str = f"{price} грн" if isinstance(price, (int, float)) else price
 
     order = {
-        "number": order_num, "user_id": user.id, "username": username,
+        "number": order_num, "user_id": user.id, "username": user.username,
         "full_name": user.full_name, "service": data.get("service"),
-        "price": data.get("price"), "details": data.get("details", message.text),
+        "price": price, "details": data.get("details", message.text),
         "edits": message.text, "status": "В работе", "rating": None,
-        "created_at": time.time(), "date": datetime.now().isoformat(timespec="seconds"),
-        "file_id": data.get("file_id")
+        "created_at": time.time(), "file_id": data.get("file_id")
     }
     save_order(order)
 
-    await message.answer(f"✅ Заказ <b>№{order_num}</b> принят!\nК оплате: <b>{price_str}</b>\nЯ свяжусь с тобой.", parse_mode="HTML", reply_markup=client_cancel_kb(order_num))
+    await message.answer(
+        f"✅ Заказ <b>№{order_num}</b> создан!\n"
+        f"К оплате: <b>{price_str}</b>\n\n"
+        "Выбери способ оплаты:",
+        parse_mode="HTML",
+        reply_markup=payment_kb()
+    )
 
     admin_text = (
         f"🆕 <b>Новый заказ №{order_num}</b>\n\n"
-        f"👤 {user.full_name} ({username})\n"
+        f"👤 {user.full_name} (@{user.username})\n"
         f"🛠 Услуга: {order['service']}\n"
         f"💰 К оплате: <b>{price_str}</b>\n"
         f"📝 Детали: {order['details']}\n"
     )
     try:
         await bot.send_message(ADMIN_ID, admin_text, parse_mode="HTML", reply_markup=admin_order_kb(order_num))
-        if order["file_id"]:
-            await bot.send_document(ADMIN_ID, order["file_id"], caption=f"Файл к заказу №{order_num}")
-    except Exception as e:
-        print(f"Ошибка: {e}")
+        if order["file_id"]: await bot.send_document(ADMIN_ID, order["file_id"], caption=f"Файл к заказу №{order_num}")
+    except Exception as e: print(f"Ошибка: {e}")
+
+# ===== ОПЛАТА ЗВЕЗДАМИ (TELEGRAM STARS) =====
+@dp.callback_query(F.data == "pay_stars")
+async def process_pay_stars(call: CallbackQuery):
+    prices = [LabeledPrice(label="Заказ", amount=STARS_PRICE)]
+    await bot.send_invoice(
+        chat_id=call.from_user.id,
+        title="Оплата заказа",
+        description="Оплата услуги в мастерской Ryzen",
+        payload=f"order_payment_{call.from_user.id}",
+        provider_token="", 
+        currency="XTR",
+        prices=prices,
+    )
+    await call.answer()
+
+@dp.pre_checkout_query()
+async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+@dp.message(F.successful_payment)
+async def process_successful_payment(message: Message):
+    await message.answer("✅ Оплата звездами прошла успешно! Спасибо!")
+    try:
+        await bot.send_message(ADMIN_ID, f"💰 Клиент @{message.from_user.username} оплатил заказ звездами!")
+    except: pass
+
+@dp.callback_query(F.data == "pay_cash")
+async def process_pay_cash(call: CallbackQuery):
+    await call.message.edit_text("✅ Вы выбрали оплату при встрече. Я свяжусь с вами для уточнения деталей.", reply_markup=after_order_kb())
+    await call.answer()
 
 # ===== ОСТАЛЬНОЕ =====
 @dp.callback_query(F.data.startswith("client_cancel_"))
 async def client_cancel(call: CallbackQuery):
     order_num = int(call.data.split("_")[2])
     order = get_order(order_num)
-    if time.time() - order["created_at"] > 86400:
-        return await call.answer("Время отмены истекло.", show_alert=True)
+    if time.time() - order["created_at"] > 86400: return await call.answer("Время отмены истекло.", show_alert=True)
     update_order(order_num, status="Отменен клиентом")
     await call.message.edit_text(f"❌ Вы отменили заказ №{order_num}.")
     await bot.send_message(ADMIN_ID, f"⚠️ Клиент отменил заказ №{order_num}.")
