@@ -1,7 +1,6 @@
 import os
 import asyncio
 import json
-import os
 import time
 from datetime import datetime
 import threading
@@ -17,8 +16,10 @@ from aiogram.types import (
 )
 
 # ===== НАСТРОЙКИ =====
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # <-- ВСТАВЬТЕ ВАШ ТОКЕН
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))                   # <-- ВСТАВЬТЕ ВАШ ID
+# Токен и ID берутся из переменных окружения (Environment Variables) на Render
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+
 ORDERS_FILE = "orders.json"
 SETTINGS_FILE = "settings.json"
 
@@ -33,8 +34,9 @@ PRICE_DRAW_TECH = 150
 PRICE_SECRET = 75
 # =====================
 
-# .strip() удаляет случайные пробелы и переносы строк
+# Проверка при запуске (чтобы видеть в логах, если токен не подтянулся)
 print(f"DEBUG BOT_TOKEN: length={len(BOT_TOKEN) if BOT_TOKEN else 0}, value='{repr(BOT_TOKEN)}'")
+
 bot = Bot(token=BOT_TOKEN.strip() if BOT_TOKEN else "0:invalid")
 dp = Dispatcher()
 
@@ -402,6 +404,5 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    # Запускаем Flask для Render
     threading.Thread(target=run_flask, daemon=True).start()
     asyncio.run(main())
