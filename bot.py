@@ -259,7 +259,7 @@ async def back_main(call: CallbackQuery, state: FSMContext):
 async def show_info(call: CallbackQuery):
     text = (
         "🤖 <b>О нашем боте и мастерской</b>\n\n"
-        "👨‍💻 <b>Создатель:</b> @Ryzen\n"
+        "👨‍💻 <b>Создатель:</b> @SuDacks\n"
         "Увлекаюсь программированием, пайкой, 3D-печатью и рисованием.\n\n"
         "🧠 <b>Наша команда:</b>\n"
         "• <b>Человек (Я):</b> Идеи, заказы, финальная сборка.\n"
