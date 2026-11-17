@@ -31,7 +31,7 @@ PRICE_DRAW_ANIME = 100
 PRICE_DRAW_JOJO = 200
 PRICE_DRAW_TECH = 150
 PRICE_SECRET = 75
-STARS_PRICE = 50 # Цена в звездах (фиксированная для теста)
+STARS_PRICE = 50 
 # =====================
 
 print(f"DEBUG BOT_TOKEN: length={len(BOT_TOKEN) if BOT_TOKEN else 0}")
@@ -202,7 +202,7 @@ async def process_toggle_draw_pause(call: CallbackQuery, state: FSMContext):
         await call.message.answer("Введите причину паузы для рисования (клиенты её увидят):")
     await call.answer()
 
-@dp.message(Order.waiting_draw_pause_reason)
+@dp.message(Order.waiting_draw_pause_reason, F.from_user.id == ADMIN_ID)
 async def set_draw_pause_reason(message: Message, state: FSMContext):
     toggle_draw_pause(reason=message.text)
     await state.clear()
@@ -225,7 +225,7 @@ async def admin_news(call: CallbackQuery, state: FSMContext):
     await call.message.answer("Напиши текст новости для рассылки всем клиентам (или 'Отмена'):")
     await call.answer()
 
-@dp.message(Order.waiting_admin_news)
+@dp.message(Order.waiting_admin_news, F.from_user.id == ADMIN_ID)
 async def send_news(message: Message, state: FSMContext):
     if message.text.lower() == 'отмена':
         await state.clear()
@@ -468,7 +468,7 @@ async def admin_done(call: CallbackQuery, state: FSMContext):
     await state.set_state(Order.waiting_admin_photo)
     await call.message.answer(f"Отправьте фото работы для заказа №{order_num}:")
 
-@dp.message(Order.waiting_admin_photo)
+@dp.message(Order.waiting_admin_photo, F.from_user.id == ADMIN_ID)
 async def send_done_photo(message: Message, state: FSMContext):
     if not message.photo: return await message.answer("Отправьте фото.")
     data = await state.get_data()
@@ -481,29 +481,35 @@ async def send_done_photo(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("admin_reject_"))
 async def admin_reject(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return await call.answer("У вас нет прав.", show_alert=True)
     order_num = int(call.data.split("_")[2])
     await state.update_data(admin_order_num=order_num)
     await state.set_state(Order.waiting_admin_reject)
-    await call.message.answer(f"Причина отклонения №{order_num}:")
+    await call.message.answer(f"Напишите причину отклонения заказа №{order_num} (клиент её увидит):")
 
-@dp.message(Order.waiting_admin_reject)
+@dp.message(Order.waiting_admin_reject, F.from_user.id == ADMIN_ID)
 async def send_reject_reason(message: Message, state: FSMContext):
     data = await state.get_data()
     order_num = data.get("admin_order_num")
     await state.clear()
-    update_order(order_num, status="Отклонен")
     order = get_order(order_num)
-    await bot.send_message(order["user_id"], f"❌ Заказ <b>№{order_num}</b> отклонен.\nПричина: {message.text}", parse_mode="HTML")
-    await message.answer(f"✅ Отклонено.")
+    if not order: return await message.answer("Заказ не найден.")
+    update_order(order_num, status="Отклонен")
+    try:
+        await bot.send_message(order["user_id"], f"❌ Заказ <b>№{order_num}</b> отклонен.\n\nПричина: {message.text}", parse_mode="HTML")
+        await message.answer(f"✅ Заказ №{order_num} отклонен, клиент уведомлен.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка отправки: {e}")
 
 @dp.callback_query(F.data.startswith("admin_comment_"))
 async def admin_comment(call: CallbackQuery, state: FSMContext):
+    if call.from_user.id != ADMIN_ID: return await call.answer("У вас нет прав.", show_alert=True)
     order_num = int(call.data.split("_")[2])
     await state.update_data(admin_order_num=order_num)
     await state.set_state(Order.waiting_admin_comment)
     await call.message.answer(f"Комментарий по №{order_num}:")
 
-@dp.message(Order.waiting_admin_comment)
+@dp.message(Order.waiting_admin_comment, F.from_user.id == ADMIN_ID)
 async def send_admin_comment(message: Message, state: FSMContext):
     data = await state.get_data()
     order_num = data.get("admin_order_num")
