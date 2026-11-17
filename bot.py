@@ -32,7 +32,8 @@ PRICE_DRAW_TECH = 150
 PRICE_SECRET = 75
 # =====================
 
-bot = Bot(token=BOT_TOKEN)
+# .strip() удаляет случайные пробелы и переносы строк
+bot = Bot(token=BOT_TOKEN.strip() if BOT_TOKEN else "0:invalid")
 dp = Dispatcher()
 
 # ===== ВЕБ-СЕРВЕР ДЛЯ RENDER =====
